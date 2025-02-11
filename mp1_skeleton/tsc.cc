@@ -82,7 +82,10 @@ int Client::connectTo()
   // ------------------------------------------------------------
     
 ///////////////////////////////////////////////////////////
-// YOUR CODE HERE
+    std::string connectionLoc = hostname + ":" + port;
+    auto channel = grpc::CreateChannel(connectionLoc, grpc::InsecureChannelCredentials()); 
+    auto stub_ = SNSService::NewStub(channel);
+    
 //////////////////////////////////////////////////////////
 
     return 1;
