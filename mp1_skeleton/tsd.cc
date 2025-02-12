@@ -38,6 +38,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <memory>
 #include <string>
 #include <stdlib.h>
@@ -85,36 +86,159 @@ std::vector<Client*> client_db;
 class SNSServiceImpl final : public SNSService::Service {
   
   Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
-    /*********
-    YOUR CODE HERE
-    **********/
+    Client* client;
+    for (int i = 0; i < client_db.size(); i++) {
+      // Find the client that made the request
+      if (client_db.at(i)->username == request->username()) {
+        client = client_db.at(i);
+        break;
+      }
+      // If the requested username is not in the db, return error status
+      if (i == client_db.size() - 1) { // Reached last index and still no match
+        return Status::CANCELLED; // Would make this more accurate error message in full imlpementation
+      }
+    }
+
+    // Add all users in db to list reply
+    for (int i = 0; i < client_db.size(); i++) {
+      list_reply->add_all_users(client_db.at(i)->username);
+    } 
+
+    // Add all followers of client to list reply
+    for (int i = 0; i < client->client_followers.size(); i++) {
+      list_reply->add_followers(client->client_followers.at(i)->username);
+    }
+
     return Status::OK;
   }
 
   Status Follow(ServerContext* context, const Request* request, Reply* reply) override {
+    std::string requestorName = request->username();
+    std::string targetName = request->arguments(0);
 
-    /*********
-    YOUR CODE HERE
-    **********/
+    // Find the client that made the request
+    Client* requestor;
+    for (int i = 0; i < client_db.size(); i++) {
+      if (client_db.at(i)->username == requestorName) {
+        requestor = client_db.at(i);
+        break;
+      }
+      // If the requestor's username is not in the db, return error status
+      if (i == client_db.size() - 1) { // Reached last index and still no match
+        reply->set_msg("Requestor does not exist");
+        Status no(grpc::StatusCode::CANCELLED, "Requestor does not exist");
+        return no; // Would make this more accurate error message in full imlpementation
+      }
+    }
+
+    // Find the client that is the target of the follow request
+    Client* target;
+    for (int i = 0; i < client_db.size(); i++) {
+      if (client_db.at(i)->username == targetName) {
+        target = client_db.at(i);
+        break;
+      }
+      // If the target's username is not in the db, return error status
+      if (i == client_db.size() - 1) { // Reached last index and still no match
+        std::stringstream errmsg;
+        errmsg << "Target does not exist " << targetName;
+        reply->set_msg("Target does not exist");
+        Status no(grpc::StatusCode::CANCELLED, errmsg.str());
+        return no; // Would make this more accurate error message in full imlpementation
+      }
+    }
+
+    // Add target to requestor's following list if not already following
+    std::vector<Client*>::iterator finder;
+    if (std::find(requestor->client_following.begin(), requestor->client_following.end(), target) 
+    == requestor->client_following.end()) {
+      requestor->client_following.push_back(target);
+    }
+    else {
+      reply->set_msg("You already follow the target");
+      Status no(grpc::StatusCode::CANCELLED, "You already follow the target");
+      return no;
+    }
+    
+    // Add requestor to target's followers list if not already a follower
+    if (std::find(target->client_followers.begin(), target->client_followers.end(), requestor)
+    == target->client_followers.end()) {
+      target->client_followers.push_back(requestor);
+    }
+    else {
+      reply->set_msg("You already follow the target");
+      Status no(grpc::StatusCode::CANCELLED, "You already follow the target");
+      return no;
+    }
+
     return Status::OK; 
   }
 
   Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
+    std::string requestorName = request->username();
+    std::string targetName = request->arguments(0);
 
-    /*********
-    YOUR CODE HERE
-    **********/
+    // Find the client that made the request
+    Client* requestor;
+    for (int i = 0; i < client_db.size(); i++) {
+      if (client_db.at(i)->username == requestorName) {
+        requestor = client_db.at(i);
+        break;
+      }
+      // If the requestor's username is not in the db, return error status
+      if (i == client_db.size() - 1) { // Reached last index and still no match
+        reply->set_msg("Requestor does not exist");
+        return Status::CANCELLED; // Would make this more accurate error message in full imlpementation
+      }
+    }
+
+    // Find the client that is the target of the follow request
+    Client* target;
+    for (int i = 0; i < client_db.size(); i++) {
+      if (client_db.at(i)->username == targetName) {
+        target = client_db.at(i);
+        break;
+      }
+      // If the target's username is not in the db, return error status
+      if (i == client_db.size() - 1) { // Reached last index and still no match
+        reply->set_msg("Target does not exist");
+        return Status::CANCELLED; // Would make this more accurate error message in full imlpementation
+      }
+    }
+
+
+    // Remove target from requestor's following
+    requestor->client_following.erase(
+      std::remove(requestor->client_following.begin(), requestor->client_following.end(), target),
+      requestor->client_following.end()
+    );
+
+    // Remove requestor from target's followers
+    target->client_followers.erase(
+      std::remove(target->client_followers.begin(), target->client_followers.end(), requestor),
+      target->client_followers.end()
+    );
 
     return Status::OK;
   }
 
   // RPC Login
   Status Login(ServerContext* context, const Request* request, Reply* reply) override {
+    std::string clientName = request->username();
+    Client* client;
+    // Check if the requested username is already logged in
+    for (int i = 0; i < client_db.size(); i++) {
+      // If so, return login failed
+      if (client_db.at(i)->username == clientName) {
+        reply->set_msg("You are already logged in");
+        return Status::CANCELLED; // Can make this a better error/failure message
+      }
+    }
 
-    /*********
-    YOUR CODE HERE
-    **********/
-    
+    // Log new client in
+    client = new Client();
+    client->username = clientName;
+    client_db.push_back(client);
     return Status::OK;
   }
 
@@ -131,7 +255,7 @@ class SNSServiceImpl final : public SNSService::Service {
 };
 
 void RunServer(std::string port_no) {
-  std::string server_address = "0.0.0.0:"+port_no;
+  std::string server_address = "127.0.0.1:"+port_no;
   SNSServiceImpl service;
 
   ServerBuilder builder;
