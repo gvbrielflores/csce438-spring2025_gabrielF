@@ -116,6 +116,13 @@ class SNSServiceImpl final : public SNSService::Service {
     std::string requestorName = request->username();
     std::string targetName = request->arguments(0);
 
+    // You cannot follow yourself
+    if (targetName == requestorName) {
+      reply->set_msg("You cannot follow yourself");
+      Status no(grpc::StatusCode::CANCELLED, "You cannot follow yourself");
+      return no;
+    }
+
     // Find the client that made the request
     Client* requestor;
     for (int i = 0; i < client_db.size(); i++) {
@@ -177,6 +184,13 @@ class SNSServiceImpl final : public SNSService::Service {
   Status UnFollow(ServerContext* context, const Request* request, Reply* reply) override {
     std::string requestorName = request->username();
     std::string targetName = request->arguments(0);
+
+    // You cannot unfollow yourself
+    if (targetName == requestorName) {
+      reply->set_msg("You cannot unfollow yourself");
+      Status no(grpc::StatusCode::CANCELLED, "You cannot unfollow yourself");
+      return no;
+    }
 
     // Find the client that made the request
     Client* requestor;
@@ -244,10 +258,24 @@ class SNSServiceImpl final : public SNSService::Service {
 
   Status Timeline(ServerContext* context, 
 		ServerReaderWriter<Message, Message>* stream) override {
+    Message message;
+    while (stream->Read(&message)) {
+      std::string authorName = message.username();
 
-    /*********
-    YOUR CODE HERE
-    **********/
+      // Find the message author in db
+      Client* authorClient;
+      for (int i = 0; i < client_db.size(); i++) {
+        if (client_db.at(i)->username == authorName) {
+          authorClient = client_db.at(i);
+          break;
+        }
+        // Honestly not sure when this would happen, but for redundancy
+        if (i == client_db.size() - 1) {
+          Status no(grpc::StatusCode::CANCELLED, "The author of read-in message does not exist");
+          return no;
+        }
+      }
+    }
     
     return Status::OK;
   }

@@ -240,6 +240,9 @@ IReply Client::Follow(const std::string& username2) {
     else if (reply.msg() == "Target does not exist") {
       ire.comm_status = FAILURE_NOT_EXISTS;
     }
+    else if (reply.msg() == "You cannot follow yourself") {
+      ire.comm_status = FAILURE_INVALID;
+    }
     else {
       ire.comm_status = SUCCESS;
     }
@@ -266,6 +269,9 @@ IReply Client::UnFollow(const std::string& username2) {
     }
     else if (reply.msg() == "Target does not exist") {
       ire.comm_status = FAILURE_NOT_EXISTS;
+    }
+    else if (reply.msg() == "You cannot unfollow yourself") {
+      ire.comm_status = FAILURE_INVALID;
     }
     else {
       ire.comm_status = SUCCESS;
@@ -318,10 +324,12 @@ void Client::Timeline(const std::string& username) {
     // and you can terminate the client program by pressing
     // CTRL-C (SIGINT)
     // ------------------------------------------------------------
-  
-    /***
-    YOUR CODE HERE
-    ***/
+
+    // Create reader-writer object
+    ClientContext context;
+    std::unique_ptr<ClientReaderWriter<Message, Message>> readWrite = this->stub_->Timeline(&context);
+    
+    
 
 }
 
