@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <csignal>
 #include <grpc++/grpc++.h>
+#include <google/protobuf/util/time_util.h>
 #include "client.h"
 
 #include "sns.grpc.pb.h"
@@ -305,6 +306,15 @@ IReply Client::Login() {
     return ire;
 }
 
+void writeHandler(std::shared_ptr<ClientReaderWriter<Message, Message>> stream) {
+  while (1) {
+    Message message;
+    message.set_msg(getPostMessage());
+    grpc::WriteOptions options;
+    stream->Write(message, options);
+  }
+}
+
 // Timeline Command
 void Client::Timeline(const std::string& username) {
 
@@ -327,10 +337,17 @@ void Client::Timeline(const std::string& username) {
 
     // Create reader-writer object
     ClientContext context;
-    std::unique_ptr<ClientReaderWriter<Message, Message>> readWrite = this->stub_->Timeline(&context);
-    
-    
+    std::shared_ptr<ClientReaderWriter<Message, Message>> readWrite = this->stub_->Timeline(&context);
+    std::thread writeThread(writeHandler, readWrite);
 
+    Message message;
+    // Reader thread implemented in the timeline function itself
+    while (readWrite->Read(&message)) {
+      time_t convertedTime = google::protobuf::util::TimeUtil::TimestampToTimeT(message.timestamp());
+      displayPostMessage(message.username(), message.msg(), convertedTime);
+    }
+
+    writeThread.join();
 }
 
 

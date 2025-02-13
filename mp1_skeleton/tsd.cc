@@ -46,6 +46,7 @@
 #include <google/protobuf/util/time_util.h>
 #include <grpc++/grpc++.h>
 #include<glog/logging.h>
+#include <filesystem>
 #define log(severity, msg) LOG(severity) << msg; google::FlushLogFiles(google::severity); 
 
 #include "sns.grpc.pb.h"
@@ -95,7 +96,8 @@ class SNSServiceImpl final : public SNSService::Service {
       }
       // If the requested username is not in the db, return error status
       if (i == client_db.size() - 1) { // Reached last index and still no match
-        return Status::CANCELLED; // Would make this more accurate error message in full imlpementation
+        Status no(grpc::StatusCode::CANCELLED, "Requestor does not exist");
+        return no; // Would make this more accurate error message in full imlpementation
       }
     }
 
@@ -202,7 +204,8 @@ class SNSServiceImpl final : public SNSService::Service {
       // If the requestor's username is not in the db, return error status
       if (i == client_db.size() - 1) { // Reached last index and still no match
         reply->set_msg("Requestor does not exist");
-        return Status::CANCELLED; // Would make this more accurate error message in full imlpementation
+        Status no(grpc::StatusCode::CANCELLED, "Requestor does not exist");
+        return no; // Would make this more accurate error message in full imlpementation
       }
     }
 
@@ -216,7 +219,8 @@ class SNSServiceImpl final : public SNSService::Service {
       // If the target's username is not in the db, return error status
       if (i == client_db.size() - 1) { // Reached last index and still no match
         reply->set_msg("Target does not exist");
-        return Status::CANCELLED; // Would make this more accurate error message in full imlpementation
+        Status no(grpc::StatusCode::CANCELLED, "Target does not exist");
+        return no; // Would make this more accurate error message in full imlpementation
       }
     }
 
@@ -245,7 +249,8 @@ class SNSServiceImpl final : public SNSService::Service {
       // If so, return login failed
       if (client_db.at(i)->username == clientName) {
         reply->set_msg("You are already logged in");
-        return Status::CANCELLED; // Can make this a better error/failure message
+        Status no(grpc::StatusCode::CANCELLED, "You are already logged in");
+        return no; // Can make this a better error/failure message
       }
     }
 
@@ -260,19 +265,88 @@ class SNSServiceImpl final : public SNSService::Service {
 		ServerReaderWriter<Message, Message>* stream) override {
     Message message;
     while (stream->Read(&message)) {
-      std::string authorName = message.username();
+      std::string username = message.username();
+      std::string userFilePath = "./posts_db/"+username+".txt";
+      std::string userFollowingPath = "./posts_db/"+username+".txt";
+      google::protobuf::Timestamp timestamp = message.timestamp();
+      std::string timeString = google::protobuf::util::TimeUtil::ToString(timestamp);
+      std::stringstream formattedBuf;
 
       // Find the message author in db
-      Client* authorClient;
+      Client* userClient;
       for (int i = 0; i < client_db.size(); i++) {
-        if (client_db.at(i)->username == authorName) {
-          authorClient = client_db.at(i);
+        if (client_db.at(i)->username == username) {
+          userClient = client_db.at(i);
           break;
         }
         // Honestly not sure when this would happen, but for redundancy
         if (i == client_db.size() - 1) {
           Status no(grpc::StatusCode::CANCELLED, "The author of read-in message does not exist");
           return no;
+        }
+
+        // Make formatted post
+        formattedBuf << "T "+timeString+"\n" << "U "+username+"\n" << "W "+message.msg()+"\n\n";
+        //Check if the user has previously open timeline stream
+        if (std::filesystem::exists(userFilePath)) { // If file already exists, append message to user post history
+          std::fstream userFile;
+          userFile.open(userFilePath);
+          if (!userFile.is_open()) {
+            Status no(grpc::StatusCode::CANCELLED, "Failed to open user's post history file");
+            return no;
+          }
+          userFile << formattedBuf.str();
+        }
+        else { // User just used timeline command for the first time, show last 20 following posts
+          std::vector<std::string> post;
+          std::fstream userFollowing;
+          std::string line;
+          std::vector<std::vector<std::string>> posts;
+          userFollowing.open(userFollowingPath);
+          if (userFollowing.is_open()) {
+            int counter = 0;
+            while (std::getline(userFollowing, line)) {
+              // Skip the empty lines to maintain counting logic
+              if (line.empty()) continue; 
+
+              // Skip the beginning T or U or wtv, just get the data
+              line = line.substr(2);
+              post.push_back(line);
+              counter++;
+              if (counter == 3) {
+                // Once we have all parts of a post  
+                posts.push_back(post); // push it to posts
+                post.clear(); // clear the post vector to get the rest
+                counter = 0; // and reset the counter
+              }
+            }
+          }
+          // Now that we have all the posts that could be in user's feed, write them in backwards
+          std::stringstream latest20;
+
+          // First reverse the iterator so we can read it in backwards
+          std::reverse(posts.begin(), posts.end());
+          for (std::vector<std::string> post : posts) {
+            std::stringstream postBuf;
+            postBuf << post.at(1) << " (" << post.at(0) << ") >> "<< post.at(2) << "\n";
+            latest20 << postBuf.str();
+          }
+
+          // Write the latest 20 to client's stream
+          grpc::WriteOptions options;
+          Message message;
+          message.set_msg(latest20.str());
+          stream->Write(message, options);
+        } 
+        
+        // Write post to followers' stream
+        for (Client* follower : userClient->client_followers) {
+          grpc::WriteOptions options;
+          Message message;
+          message.set_msg(formattedBuf.str());
+          follower->stream->Write(message, options);
+          std::string followerFollowingPath = "./posts_db/"+follower->username+".txt";
+          std::fstream follwerFollowing(followerFollowingPath);
         }
       }
     }
