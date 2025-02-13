@@ -176,7 +176,9 @@ IReply Client::processCommand(std::string& input)
       ire = List();
     }
     else {
-      processTimeline();
+      ire.comm_status = SUCCESS;
+      Status timelineGo(grpc::StatusCode::OK, "");
+      ire.grpc_status = timelineGo;
     }
 
     return ire;
@@ -239,10 +241,10 @@ IReply Client::Follow(const std::string& username2) {
       ire.comm_status = FAILURE_NOT_EXISTS;
     }
     else if (reply.msg() == "Target does not exist") {
-      ire.comm_status = FAILURE_NOT_EXISTS;
+      ire.comm_status = FAILURE_INVALID_USERNAME;
     }
     else if (reply.msg() == "You cannot follow yourself") {
-      ire.comm_status = FAILURE_INVALID;
+      ire.comm_status = FAILURE_ALREADY_EXISTS;
     }
     else {
       ire.comm_status = SUCCESS;
@@ -269,10 +271,13 @@ IReply Client::UnFollow(const std::string& username2) {
       ire.comm_status = FAILURE_NOT_EXISTS;
     }
     else if (reply.msg() == "Target does not exist") {
-      ire.comm_status = FAILURE_NOT_EXISTS;
+      ire.comm_status = FAILURE_INVALID_USERNAME;
     }
     else if (reply.msg() == "You cannot unfollow yourself") {
-      ire.comm_status = FAILURE_INVALID;
+      ire.comm_status = FAILURE_INVALID_USERNAME;
+    }
+    else if (reply.msg() == "You were never following the target") {
+      ire.comm_status = FAILURE_INVALID_USERNAME;
     }
     else {
       ire.comm_status = SUCCESS;
@@ -306,10 +311,11 @@ IReply Client::Login() {
     return ire;
 }
 
-void writeHandler(std::shared_ptr<ClientReaderWriter<Message, Message>> stream) {
+void writeHandler(std::shared_ptr<ClientReaderWriter<Message, Message>> stream, const std::string& username) {
   while (1) {
-    Message message;
-    message.set_msg(getPostMessage());
+    std::string postMessage = getPostMessage();
+    std::cout<<"You wrote: "+postMessage << std::endl;
+    Message message = MakeMessage(username, postMessage);
     grpc::WriteOptions options;
     stream->Write(message, options);
   }
@@ -336,9 +342,16 @@ void Client::Timeline(const std::string& username) {
     // ------------------------------------------------------------
 
     // Create reader-writer object
+    std::cout << username+" entering timeline\n";
     ClientContext context;
     std::shared_ptr<ClientReaderWriter<Message, Message>> readWrite = this->stub_->Timeline(&context);
-    std::thread writeThread(writeHandler, readWrite);
+
+    // Send a hello/open message to signal new connection
+    Message hello = MakeMessage(username, "Hi server");
+    grpc::WriteOptions options;
+    readWrite->Write(hello, options);
+
+    std::thread writeThread(writeHandler, readWrite, username);
 
     Message message;
     // Reader thread implemented in the timeline function itself

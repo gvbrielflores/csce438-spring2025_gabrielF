@@ -121,7 +121,7 @@ class SNSServiceImpl final : public SNSService::Service {
     // You cannot follow yourself
     if (targetName == requestorName) {
       reply->set_msg("You cannot follow yourself");
-      Status no(grpc::StatusCode::CANCELLED, "You cannot follow yourself");
+      Status no(grpc::StatusCode::OK, "You cannot follow yourself");
       return no;
     }
 
@@ -135,7 +135,7 @@ class SNSServiceImpl final : public SNSService::Service {
       // If the requestor's username is not in the db, return error status
       if (i == client_db.size() - 1) { // Reached last index and still no match
         reply->set_msg("Requestor does not exist");
-        Status no(grpc::StatusCode::CANCELLED, "Requestor does not exist");
+        Status no(grpc::StatusCode::OK, "Requestor does not exist");
         return no; // Would make this more accurate error message in full imlpementation
       }
     }
@@ -152,7 +152,7 @@ class SNSServiceImpl final : public SNSService::Service {
         std::stringstream errmsg;
         errmsg << "Target does not exist " << targetName;
         reply->set_msg("Target does not exist");
-        Status no(grpc::StatusCode::CANCELLED, errmsg.str());
+        Status no(grpc::StatusCode::OK, errmsg.str());
         return no; // Would make this more accurate error message in full imlpementation
       }
     }
@@ -165,7 +165,7 @@ class SNSServiceImpl final : public SNSService::Service {
     }
     else {
       reply->set_msg("You already follow the target");
-      Status no(grpc::StatusCode::CANCELLED, "You already follow the target");
+      Status no(grpc::StatusCode::OK, "You already follow the target");
       return no;
     }
     
@@ -175,8 +175,8 @@ class SNSServiceImpl final : public SNSService::Service {
       target->client_followers.push_back(requestor);
     }
     else {
-      reply->set_msg("You already follow the target");
-      Status no(grpc::StatusCode::CANCELLED, "You already follow the target");
+      reply->set_msg("Requestor already follows you");
+      Status no(grpc::StatusCode::OK, "Requestor already follows you");
       return no;
     }
 
@@ -190,7 +190,7 @@ class SNSServiceImpl final : public SNSService::Service {
     // You cannot unfollow yourself
     if (targetName == requestorName) {
       reply->set_msg("You cannot unfollow yourself");
-      Status no(grpc::StatusCode::CANCELLED, "You cannot unfollow yourself");
+      Status no(grpc::StatusCode::OK, "You cannot unfollow yourself");
       return no;
     }
 
@@ -204,7 +204,7 @@ class SNSServiceImpl final : public SNSService::Service {
       // If the requestor's username is not in the db, return error status
       if (i == client_db.size() - 1) { // Reached last index and still no match
         reply->set_msg("Requestor does not exist");
-        Status no(grpc::StatusCode::CANCELLED, "Requestor does not exist");
+        Status no(grpc::StatusCode::OK, "Requestor does not exist");
         return no; // Would make this more accurate error message in full imlpementation
       }
     }
@@ -219,23 +219,38 @@ class SNSServiceImpl final : public SNSService::Service {
       // If the target's username is not in the db, return error status
       if (i == client_db.size() - 1) { // Reached last index and still no match
         reply->set_msg("Target does not exist");
-        Status no(grpc::StatusCode::CANCELLED, "Target does not exist");
+        Status no(grpc::StatusCode::OK, "Target does not exist");
         return no; // Would make this more accurate error message in full imlpementation
       }
     }
 
 
-    // Remove target from requestor's following
-    requestor->client_following.erase(
-      std::remove(requestor->client_following.begin(), requestor->client_following.end(), target),
-      requestor->client_following.end()
-    );
+    // Remove target from requestor's following if they are there
+    if (std::find(requestor->client_following.begin(), requestor->client_following.end(), target) == 
+    requestor->client_following.end()) {
+      reply->set_msg("You were never following the target");
+      Status no(grpc::StatusCode::OK, "You were never following the target");
+      return no;
+    }
+    else {
+      requestor->client_following.erase(
+        std::remove(requestor->client_following.begin(), requestor->client_following.end(), target),
+        requestor->client_following.end()
+      );
+    }
 
-    // Remove requestor from target's followers
-    target->client_followers.erase(
-      std::remove(target->client_followers.begin(), target->client_followers.end(), requestor),
-      target->client_followers.end()
-    );
+    // Remove requestor from target's followers if they are there
+    if (std::find(target->client_followers.begin(), target->client_followers.end(), requestor) 
+    == target->client_followers.end()) {
+      reply->set_msg("Requestor was never your follower");
+      Status no(grpc::StatusCode::OK, "Requestor was never your follower");
+    }
+    else {
+      target->client_followers.erase(
+        std::remove(target->client_followers.begin(), target->client_followers.end(), requestor),
+        target->client_followers.end()
+      );
+    }
 
     return Status::OK;
   }
@@ -266,17 +281,19 @@ class SNSServiceImpl final : public SNSService::Service {
     Message message;
     while (stream->Read(&message)) {
       std::string username = message.username();
-      std::string userFilePath = "./posts_db/"+username+".txt";
-      std::string userFollowingPath = "./posts_db/"+username+".txt";
+      std::string userFilePath = username+".txt";
+      std::string userFollowingPath = username+"_following.txt";
       google::protobuf::Timestamp timestamp = message.timestamp();
       std::string timeString = google::protobuf::util::TimeUtil::ToString(timestamp);
       std::stringstream formattedBuf;
+      // std::cout << username+" called timeline\n";
 
       // Find the message author in db
-      Client* userClient;
+      Client* userClient = nullptr;
       for (int i = 0; i < client_db.size(); i++) {
         if (client_db.at(i)->username == username) {
           userClient = client_db.at(i);
+          userClient->stream = stream;
           break;
         }
         // Honestly not sure when this would happen, but for redundancy
@@ -284,25 +301,35 @@ class SNSServiceImpl final : public SNSService::Service {
           Status no(grpc::StatusCode::CANCELLED, "The author of read-in message does not exist");
           return no;
         }
-
+      }
         // Make formatted post
         formattedBuf << "T "+timeString+"\n" << "U "+username+"\n" << "W "+message.msg()+"\n\n";
-        //Check if the user has previously open timeline stream
-        if (std::filesystem::exists(userFilePath)) { // If file already exists, append message to user post history
+
+        // Check if the user has previously open timeline stream
+        if (message.msg() != "Hi server") { // Not hello message, append message to user post history
+          std::cout<< username << " posted\n";
           std::fstream userFile;
-          userFile.open(userFilePath);
+          // Open user file to append
+          userFile.open(userFilePath, std::ios::app);
           if (!userFile.is_open()) {
             Status no(grpc::StatusCode::CANCELLED, "Failed to open user's post history file");
             return no;
           }
           userFile << formattedBuf.str();
+          userFile.close();
         }
         else { // User just used timeline command for the first time, show last 20 following posts
+          std::cout<<username<< " entered timeline\n";
           std::vector<std::string> post;
           std::fstream userFollowing;
           std::string line;
           std::vector<std::vector<std::string>> posts;
-          userFollowing.open(userFollowingPath);
+          userFollowing.open(userFollowingPath, std::ios::app);
+          if (!userFollowing) {
+            Status no(grpc::StatusCode::CANCELLED, "Couldn't open/create user following file");
+          }
+          userFollowing.close();
+          userFollowing.open(userFollowingPath, std::ios::in);
           if (userFollowing.is_open()) {
             int counter = 0;
             while (std::getline(userFollowing, line)) {
@@ -321,34 +348,56 @@ class SNSServiceImpl final : public SNSService::Service {
               }
             }
           }
+          userFollowing.close();
+
           // Now that we have all the posts that could be in user's feed, write them in backwards
-          std::stringstream latest20;
-
-          // First reverse the iterator so we can read it in backwards
+          // First reverse the vector so we can read it in backwards
           std::reverse(posts.begin(), posts.end());
-          for (std::vector<std::string> post : posts) {
-            std::stringstream postBuf;
-            postBuf << post.at(1) << " (" << post.at(0) << ") >> "<< post.at(2) << "\n";
-            latest20 << postBuf.str();
-          }
-
           // Write the latest 20 to client's stream
-          grpc::WriteOptions options;
-          Message message;
-          message.set_msg(latest20.str());
-          stream->Write(message, options);
+          size_t numRead = std::min(posts.size(), size_t(20));
+          for (size_t i = 0; i < numRead; i++) {
+            grpc::WriteOptions options;
+            Message messageWrite;
+            google::protobuf::Timestamp* stamp = new google::protobuf::Timestamp();
+            std::string rfcString = posts.at(i).at(0);
+            rfcString.replace(10, 1, "T");
+            rfcString.append("Z");
+            google::protobuf::util::TimeUtil::FromString(rfcString, stamp);
+            messageWrite.set_msg(posts.at(i).at(2));
+            messageWrite.set_username(posts.at(i).at(1));
+            messageWrite.set_allocated_timestamp(stamp);
+            stream->Write(messageWrite, options);
+          }
+          
         } 
         
-        // Write post to followers' stream
-        for (Client* follower : userClient->client_followers) {
-          grpc::WriteOptions options;
-          Message message;
-          message.set_msg(formattedBuf.str());
-          follower->stream->Write(message, options);
-          std::string followerFollowingPath = "./posts_db/"+follower->username+".txt";
-          std::fstream follwerFollowing(followerFollowingPath);
+        // Write post to followers' stream and append to following file(s) if it is not the hello message
+        if (message.msg() != "Hi server") {
+          for (Client* follower : userClient->client_followers) {
+            grpc::WriteOptions options;
+            Message messageWrite;
+            messageWrite.set_username(username);
+            auto *followerTimestamp = new google::protobuf::Timestamp(timestamp);
+            messageWrite.set_allocated_timestamp(followerTimestamp);
+            messageWrite.set_msg(message.msg());            
+            if (follower->stream != 0) {
+              std::cout<<"Writing to "<< follower->username <<"'s stream\n";
+              follower->stream->Write(messageWrite, options);
+              std::cout<<"Succesfully wrote to "<< follower->username <<"'s stream\n";
+            }
+
+            // Append to following files
+            std::string followerFollowingPath = follower->username+"_following.txt";
+            std::fstream followerFollowing(followerFollowingPath, std::ios::app);
+            if (!followerFollowing.is_open()) {
+              Status no(grpc::StatusCode::CANCELLED, "A follower's following file was not able to be opened");
+              return no;
+            }
+            followerFollowing << formattedBuf.str();
+            followerFollowing.close();
+            std::cout << username+" is writing to "<<follower->username<< std::endl;
+          }
         }
-      }
     }
     
     return Status::OK;
