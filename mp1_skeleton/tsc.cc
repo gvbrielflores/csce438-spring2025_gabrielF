@@ -314,7 +314,6 @@ IReply Client::Login() {
 void writeHandler(std::shared_ptr<ClientReaderWriter<Message, Message>> stream, const std::string& username) {
   while (1) {
     std::string postMessage = getPostMessage();
-    std::cout<<"You wrote: "+postMessage << std::endl;
     Message message = MakeMessage(username, postMessage);
     grpc::WriteOptions options;
     stream->Write(message, options);
@@ -342,12 +341,11 @@ void Client::Timeline(const std::string& username) {
     // ------------------------------------------------------------
 
     // Create reader-writer object
-    std::cout << username+" entering timeline\n";
     ClientContext context;
     std::shared_ptr<ClientReaderWriter<Message, Message>> readWrite = this->stub_->Timeline(&context);
 
     // Send a hello/open message to signal new connection
-    Message hello = MakeMessage(username, "Hi server");
+    Message hello = MakeMessage(username, "Hi server thismostlikelywouldnotbewrittenbyaperson");
     grpc::WriteOptions options;
     readWrite->Write(hello, options);
 

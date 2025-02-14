@@ -306,7 +306,7 @@ class SNSServiceImpl final : public SNSService::Service {
         formattedBuf << "T "+timeString+"\n" << "U "+username+"\n" << "W "+message.msg()+"\n\n";
 
         // Check if the user has previously open timeline stream
-        if (message.msg() != "Hi server") { // Not hello message, append message to user post history
+        if (message.msg() != "Hi server thismostlikelywouldnotbewrittenbyaperson") { // Not hello message, append message to user post history
           std::cout<< username << " posted\n";
           std::fstream userFile;
           // Open user file to append
@@ -372,7 +372,7 @@ class SNSServiceImpl final : public SNSService::Service {
         } 
         
         // Write post to followers' stream and append to following file(s) if it is not the hello message
-        if (message.msg() != "Hi server") {
+        if (message.msg() != "Hi server thismostlikelywouldnotbewrittenbyaperson") {
           for (Client* follower : userClient->client_followers) {
             grpc::WriteOptions options;
             Message messageWrite;
