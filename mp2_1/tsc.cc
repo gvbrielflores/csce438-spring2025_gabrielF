@@ -207,9 +207,8 @@ IReply Client::processCommand(std::string& input)
       ire = List();
     }
     else {
-      ire.comm_status = SUCCESS;
-      Status timelineGo(grpc::StatusCode::OK, "");
-      ire.grpc_status = timelineGo;
+      // Check server connection with fake list call
+      ire = List();
     }
 
     return ire;

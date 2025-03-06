@@ -317,7 +317,7 @@ class SNSServiceImpl final : public SNSService::Service {
 
         // Check if the user has previously open timeline stream
         if (message.msg() != "Hi server thismostlikelywouldnotbewrittenbyaperson") { // Not hello message, append message to user post history
-          std::cout<< username << " posted\n";
+          log(INFO, username + " posted\n");
           std::fstream userFile;
           // Open user file to append
           userFile.open(userFilePath, std::ios::app);
@@ -329,7 +329,7 @@ class SNSServiceImpl final : public SNSService::Service {
           userFile.close();
         }
         else { // User just used timeline command for the first time, show last 20 following posts
-          std::cout<<username<< " entered timeline\n";
+          log(INFO, username + " entered timeline\n");
           std::vector<std::string> post;
           std::fstream userFollowing;
           std::string line;
@@ -391,9 +391,9 @@ class SNSServiceImpl final : public SNSService::Service {
             messageWrite.set_allocated_timestamp(followerTimestamp);
             messageWrite.set_msg(message.msg());            
             if (follower->stream != 0) {
-              std::cout<<"Writing to "<< follower->username <<"'s stream\n";
+              log(INFO, "Writing to "+ follower->username +"'s stream\n");
               follower->stream->Write(messageWrite, options);
-              std::cout<<"Succesfully wrote to "<< follower->username <<"'s stream\n";
+              log(INFO, "Succesfully wrote to "+ follower->username +"'s stream\n");
             }
 
             // Append to following files

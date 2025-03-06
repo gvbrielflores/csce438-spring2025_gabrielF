@@ -226,8 +226,7 @@ void checkHeartbeat(){
         for (auto& c : clusters){
             for(auto& s : c){
                 if(difftime(getTimeNow(),s->last_heartbeat)>10){
-                    std::cout << "missed heartbeat from server " << s->serverID << std::endl;
-                    
+                    log(INFO, "missed heartbeat from server " + std::to_string(s->serverID) + "\n");
                     if(!s->missed_heartbeat){
                         s->missed_heartbeat = true;
                         s->last_heartbeat = getTimeNow();
