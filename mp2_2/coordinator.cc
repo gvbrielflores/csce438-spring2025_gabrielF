@@ -69,9 +69,15 @@ std::mutex v_mutex;
 std::vector<zNode*> cluster1;
 std::vector<zNode*> cluster2;
 std::vector<zNode*> cluster3;
+// maintain separate synchronizer lists
+std::vector<zNode*> synchCluster1;
+std::vector<zNode*> synchCluster2;
+std::vector<zNode*> synchCluster3;
 
 // creating a vector of vectors containing znodes
 std::vector<std::vector<zNode*>> clusters = {cluster1, cluster2, cluster3};
+// Vector of vectors containing synchronizer zNodes
+std::vector<std::vector<zNode*>> synchClusters = {synchCluster1, synchCluster2, synchCluster3};
 
 
 //func declarations
@@ -95,65 +101,134 @@ class CoordServiceImpl final : public CoordService::Service {
 
     Status Heartbeat(ServerContext* context, const ServerInfo* serverinfo, Confirmation* confirmation) override {
         // Your code here
-        // See if the heartbeat is registration or normal
+        // See if the heartbeat is registration or normal & whether it is from synchronizer
         zNode *heartbeatSender;
         auto clientMetadata = context->client_metadata();
-        auto isRegistration = clientMetadata.find("registration-heartbeat");
-        int clusterId = std::stoi(clientMetadata.find("clusterid")->second.data());
-        if (isRegistration != clientMetadata.end()) { // Registration heartbeat
-            v_mutex.lock();
+        auto isSynchronizer = clientMetadata.find("synchronizer");
+        if (isSynchronizer != clientMetadata.end()) { // Synchronizer heartbeat
+            std::cout<< "synch beat" << std::endl;
+            int clusterId = serverinfo->clusterid();
+            std::vector<zNode *>* senderCluster = &synchClusters.at(clusterId - 1);
+            auto isRegistration = clientMetadata.find("registration-heartbeat");
+            if (isRegistration == clientMetadata.end()) { // Regular heartbeat
+                v_mutex.lock();
 
-            // Make a new zNode for the cluster
-            log(INFO, "Got a registration request from "+ std::to_string(clusterId) +"/"+std::to_string(serverinfo->serverid())+"\n");
+                log(INFO, "Normal SYNCH heartbeat from "+ std::to_string(clusterId) +"/"+std::to_string(serverinfo->serverid())+"\n");
+                heartbeatSender = senderCluster->at(serverinfo->serverid() - 1); // Grab the correct synchronizer
 
-            std::vector<zNode *>* senderCluster = &clusters.at(clusterId - 1);
-            // If there are no other servers on the cluster, the registering server is the master of this cluster now
-            // Otherwise, it is a slave
-            bool master = (senderCluster->size() == 0) ? true : false;
+                // Update the heartbeat sender's zNode (re-write everything like Zookeeper does it)
+                heartbeatSender->serverID = serverinfo->serverid();
+                heartbeatSender->hostname = serverinfo->hostname();
+                heartbeatSender->port = serverinfo->port();
+                heartbeatSender->type = serverinfo->type();
+                // heartbeatSender->isMaster = serverinfo->ismaster(); master status should only be updated by coordinator
+                heartbeatSender->last_heartbeat = getTimeNow();
+                if (heartbeatSender->isMaster) std::cout << heartbeatSender->serverID+" is master on "+std::to_string(clusterId) << std::endl;
+                else std::cout << heartbeatSender->serverID+" is slave on "+std::to_string(clusterId) << std::endl;
 
-            if (master) {
-                log(INFO, "New master "+std::to_string(serverinfo->serverid())+" for cluster "+std::to_string(clusterId)+"\n");
+                confirmation->set_status(heartbeatSender->isMaster); // Tell server whether they are master or slave on every hb 
+                
+                v_mutex.unlock();
             }
+            else {
+                v_mutex.lock();
 
-            heartbeatSender = new zNode(
-                serverinfo->serverid(),
-                serverinfo->hostname(),
-                serverinfo->port(),
-                serverinfo->type(),
-                getTimeNow(),
-                master,
-                false
-            );
+                int clusterId = serverinfo->clusterid();
+                // Make a new zNode for the synchronizer
+                log(INFO, "Got a SYNCH registration request from "+ std::to_string(clusterId) +"/"+std::to_string(serverinfo->serverid())+"\n");
 
-            // Place in correct spot by id (this is assuming servers can have whatever id they want)
-            if (heartbeatSender->serverID - 1 >= senderCluster->size()) { // Server id is not contained in the cluster
-                zNode *dummy = new zNode();
-                for (int i = heartbeatSender->serverID - 1; i < heartbeatSender->serverID; i++) {// Starting from end of the current array
-                    senderCluster->push_back(dummy);
+                // If there are no other synchronizers on the cluster, the registering server is the master of this cluster now
+                // Otherwise, it is a slave
+                bool master = (senderCluster->size() == 0) ? true : false;
+
+                if (master) {
+                    log(INFO, "New master SYNCH "+std::to_string(serverinfo->serverid())+" for cluster "+std::to_string(clusterId)+"\n");
                 }
+
+                heartbeatSender = new zNode(
+                    serverinfo->serverid(),
+                    serverinfo->hostname(),
+                    serverinfo->port(),
+                    serverinfo->type(),
+                    getTimeNow(),
+                    master,
+                    false
+                );
+
+                // Place in correct spot by id (this is assuming synchronizers can have whatever id they want)
+                if (heartbeatSender->serverID - 1 >= senderCluster->size()) { // Server id is not contained in the cluster
+                    for (int i = senderCluster->size(); i < heartbeatSender->serverID; i++) {// Starting from end of the current array
+                        senderCluster->push_back(new zNode());
+                    }
+                }
+                senderCluster->at(heartbeatSender->serverID - 1) = heartbeatSender;
+
+                confirmation->set_status(master);// Signal if the heartbeatSender is a master or not
+                
+                v_mutex.unlock();
             }
-            senderCluster->at(heartbeatSender->serverID - 1) = heartbeatSender;
-
-            // // Push a new server into the corresponding cluster vector
-            // senderCluster->push_back(heartbeatSender);
-
-            v_mutex.unlock();
         }
-        else {
-            v_mutex.lock();
+        else { // Server heartbeat
+            auto isRegistration = clientMetadata.find("registration-heartbeat");
+            int clusterId = std::stoi(clientMetadata.find("clusterid")->second.data());
+            if (isRegistration != clientMetadata.end()) { // Registration heartbeat
+                v_mutex.lock();
 
-            log(INFO, "Got a heartbeat from "+ std::to_string(clusterId) +"/"+std::to_string(serverinfo->serverid())+"\n");
-            // Find the server
-            heartbeatSender = clusters.at(clusterId - 1).at(serverinfo->serverid() - 1); // Grab based on server id
-            // Update the heartbeat sender's zNode (re-write everything like Zookeeper does it)
-            heartbeatSender->serverID = serverinfo->serverid();
-            heartbeatSender->hostname = serverinfo->hostname();
-            heartbeatSender->port = serverinfo->port();
-            heartbeatSender->type = serverinfo->type();
-            // heartbeatSender->isMaster = serverinfo->ismaster(); Master is only determined and kept track of coordinator side.
-            heartbeatSender->last_heartbeat = getTimeNow();
+                // Make a new zNode for the server
+                log(INFO, "Got a registration request from "+ std::to_string(clusterId) +"/"+std::to_string(serverinfo->serverid())+"\n");
 
-            v_mutex.unlock();
+                std::vector<zNode *>* senderCluster = &clusters.at(clusterId - 1);
+                // If there are no other servers on the cluster, the registering server is the master of this cluster now
+                // Otherwise, it is a slave
+                bool master = (senderCluster->size() == 0) ? true : false;
+
+                if (master) {
+                    log(INFO, "New master "+std::to_string(serverinfo->serverid())+" for cluster "+std::to_string(clusterId)+"\n");
+                }
+
+                heartbeatSender = new zNode(
+                    serverinfo->serverid(),
+                    serverinfo->hostname(),
+                    serverinfo->port(),
+                    serverinfo->type(),
+                    getTimeNow(),
+                    master,
+                    false
+                );
+
+                // Place in correct spot by id (this is assuming servers can have whatever id they want)
+                if (heartbeatSender->serverID - 1 >= senderCluster->size()) { // Server id is not contained in the cluster
+                    for (int i = senderCluster->size(); i < heartbeatSender->serverID; i++) {// Starting from end of the current array
+                        senderCluster->push_back(new zNode());
+                    }
+                }
+                senderCluster->at(heartbeatSender->serverID - 1) = heartbeatSender;
+
+                // // Push a new server into the corresponding cluster vector
+                // senderCluster->push_back(heartbeatSender);
+
+                confirmation->set_status(master);// Signal if the heartbeatSender is a master or not
+
+                v_mutex.unlock();
+            }
+            else {
+                v_mutex.lock();
+
+                log(INFO, "Got a heartbeat from "+ std::to_string(clusterId) +"/"+std::to_string(serverinfo->serverid())+"\n");
+                // Find the server
+                heartbeatSender = clusters.at(clusterId - 1).at(serverinfo->serverid() - 1); // Grab based on server id
+                // Update the heartbeat sender's zNode (re-write everything like Zookeeper does it)
+                heartbeatSender->serverID = serverinfo->serverid();
+                heartbeatSender->hostname = serverinfo->hostname();
+                heartbeatSender->port = serverinfo->port();
+                heartbeatSender->type = serverinfo->type();
+                // heartbeatSender->isMaster = serverinfo->ismaster(); master status should only be updated by coordinator
+                heartbeatSender->last_heartbeat = getTimeNow();
+
+                confirmation->set_status(heartbeatSender->isMaster); // Tell server whether they are master or slave on every hb
+
+                v_mutex.unlock();
+            }
         }
 
         return Status::OK;
@@ -166,6 +241,7 @@ class CoordServiceImpl final : public CoordService::Service {
         // Your code here
         int clientId = id->id();
         int clusterId = ((clientId - 1) % 3) + 1;
+        // std::cout << "client "+std::to_string(clusterId)+"/"+std::to_string(clusterId)+" wants a server" << std::endl;
         
         // Build the server info for the client
         // First get the client's assigned cluster
@@ -176,6 +252,7 @@ class CoordServiceImpl final : public CoordService::Service {
         for (int i = 0; i < assignedCluster->size(); i++) {
             if ((assignedCluster->at(i))->isMaster) {
                 server = assignedCluster->at(i);
+                // std::cout << "master "+std::to_string(server->serverID)+" found for client "+std::to_string(clientId) <<std::endl;
             }
         }
 
@@ -190,36 +267,46 @@ class CoordServiceImpl final : public CoordService::Service {
     }
 
     Status GetSlave(ServerContext *context, const ID *id, ServerInfo *serverinfo) {
-        int clientId = id->id();
-        int clusterId = ((clientId - 1) % 3) + 1;
-        
-        // Build the server info for the client
-        // First get the client's assigned cluster
-        std::vector<zNode *> *assignedCluster = &clusters.at(clusterId - 1);
-
-        // Grab the Slave server in the cluster
-        zNode *server;
-        for (int i = 0; i < assignedCluster->size(); i++) {
-            if (!(assignedCluster->at(i))->isMaster) {
-                server = assignedCluster->at(i);
+        // Master server is asking for their corresponding slave
+        int clusterId = id->id();
+        std::vector<zNode *> *masterCluster = &clusters.at(clusterId - 1);
+        zNode *slave;
+        bool slaveFound = false;
+        for (auto s : *masterCluster) { // Go thru server list and grab the slave
+            if (s->serverID != -1 && !s->isMaster) {
+                slave = s;
+                slaveFound = true;
             }
         }
 
-        // Fill in server info for the client
-        serverinfo->set_serverid(server->serverID);
-        serverinfo->set_hostname(server->hostname);
-        serverinfo->set_port(server->port);
-        serverinfo->set_ismaster(server->isMaster);
-        serverinfo->set_type(server->type);
-
+        if (slaveFound) {
+            log(INFO, "Slave found!");
+            serverinfo->set_serverid(slave->serverID);
+            serverinfo->set_hostname(slave->hostname);
+            serverinfo->set_port(slave->port);
+            serverinfo->set_ismaster(slave->isMaster);
+            serverinfo->set_type(slave->type);
+            log(INFO, "Master of cluster "+std::to_string(clusterId)+" has discovered slave "+std::to_string(slave->serverID)+" \n");
+        }
+        else { // Fill in a dummy
+            log(INFO, "no slave");
+            serverinfo->set_serverid(-1);
+            serverinfo->set_hostname("null");
+            serverinfo->set_port("null");
+            serverinfo->set_ismaster(false);
+            serverinfo->set_type("null");
+            log(INFO, "Master of cluster "+std::to_string(clusterId)+" has no slave\n");
+        }
         return Status::OK;
     }
 
     Status GetAllFollowerServers(ServerContext *context, const ID *id, ServerList *serverlist) {
+
         return Status::OK;
     }
 
     Status GetFollowerServer(ServerContext *context, const ID *id, ServerInfo *serverinfo) {
+        
         return Status::OK;
     }
 
@@ -265,7 +352,24 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-
+// This function simply switches master synchronizer to slave and slave synchronizer to master
+void updateSynchronizers() {
+    log(INFO, "Swithcing SYNCHS");
+    for (auto& sc : synchClusters) { 
+        for (auto& s : sc) {
+            int newSlave; // Track who became a slave
+            if (s->isMaster && s->serverID != -1) { // If active master, change
+                log(INFO, "SYNCH "+std::to_string(s->serverID)+" is now a slave\n");
+                s->isMaster = false; // Synchs don't fail, so simply switch their role
+                newSlave = s->serverID;
+            }
+            if (!s->isMaster && s->serverID != -1 && s->serverID != newSlave) { // If active previous (not new) slave, change
+                log(INFO, "SYNCH "+std::to_string(s->serverID)+" is now a master\n");
+                s->isMaster = true;
+            }
+        }
+    }
+}
 
 void checkHeartbeat(){
     while(true){
@@ -284,9 +388,10 @@ void checkHeartbeat(){
                         log(INFO, "missed heartbeat from server " + std::to_string(s->serverID) + "\n");
                         if (s->isMaster) { // If it was the master, must promote the slave to master
                             log(INFO, "Master "+std::to_string(s->serverID)+" has died"+ "\n");
+                            updateSynchronizers();
                             s->serverID = -1; // Mark server as non-existent (failed)
                             for (auto& s : c) { // zNodes are not actually removed from the vector, so we need to find the active slave (there should only be one slave)
-                                if (s->serverID != -1 && !s->isMaster) { // Active slave server
+                                if (s->serverID != -1 && !s->isMaster) { // Active slave server is new master
                                     log(INFO, "New master: "+std::to_string(s->serverID) + "\n");
                                     s->isMaster = true;
                                 }
@@ -296,6 +401,7 @@ void checkHeartbeat(){
                             s->missed_heartbeat = true;
                             s->last_heartbeat = getTimeNow();
                         }
+                        s->serverID = -1; // Mark server as non-existent (failed)
                     }
                 }
             }

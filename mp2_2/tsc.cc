@@ -105,12 +105,16 @@ int Client::connectTo()
       myId->set_id(std::stoi(username));
       ClientContext context;
       Status serverReqStatus = this->coordStub_->GetServer(&context, *myId, &newServer);
+      if (!serverReqStatus.ok()) {
+        std::cout <<  " (code " << serverReqStatus.error_code() << ")" << std::endl;
+      }
 
       std::string serverHostname = newServer.hostname();
       std::string serverPort = newServer.port();
 
       // Create the stub associated with the server's hostname and port provided by coordinator
       std::string serverConnection = serverHostname + ":" + serverPort;
+      std::cout << "connect to this server: "+serverConnection << std::endl;
       auto serverChannel = grpc::CreateChannel(serverConnection, grpc::InsecureChannelCredentials()); 
       this->stub_ = SNSService::NewStub(serverChannel);
     }
@@ -328,6 +332,7 @@ IReply Client::Login() {
     // Build request with client username and send login request thru stub and get return status
     req.set_username(username);
     status = stub_->Login(&context, req, &reply);
+    std::cout << "login status: "+status.error_message()+"\n" << std::endl;
     ire.grpc_status = status;
 
     // Set ire status based on returned message
